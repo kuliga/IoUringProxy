@@ -14,53 +14,6 @@ use std::{
     collections::VecDeque,
 };
 
-pub struct ConnectionSlots {
-    entry: squeue::Entry, // one accept entry is enough for every connection attempt
-    count: usize, // number of connections for server to currently accept
-    capacity: usize, // maximum accepted connections number
-}
-
-impl ConnectionSlots {
-    pub fn new(fd: RawFd, count: usize, capacity: usize) -> ConnectionSlots {
-        ConnectionSlots {
-            entry: opcode::Accept::new(types::Fd(fd), ptr::null_mut(), ptr::null_mut())
-                .build()
-                .user_data(0),
-            count: count,
-            capacity: capacity,
-        }
-    }
-    
-    fn consume_slot(&mut self) {
-        self.count += 1;
-    }
-
-    // should be invoked when the connection is accepted
-    pub fn produce_slot(&mut self) {
-        self.count -= 1;
-    }
-
-    fn is_empty(&self) -> bool {
-        self.count == 0
-    }
-
-    fn is_full(&self) -> bool {
-        self.count == self.capacity
-    }
-
-    pub fn spawn_slots(&mut self, want: usize, proxy: &mut IoUringProxy) {
-        for n in 0..want {
-            if !self.is_full() {
-                proxy.push_sqe(&self.entry);
-                self.consume_slot();
-            }
-        }
-
-        // sync the submission queue with the kernel
-        proxy.sq_sync();
-    }
-}
-
 pub struct IoUringProxy {
     ring: IoUring<squeue::Entry, cqueue::Entry>,
     backlog: VecDeque<io_uring::squeue::Entry>, // backlog for every submitted non-success io operation 
