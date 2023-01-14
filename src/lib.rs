@@ -32,12 +32,12 @@ impl ConnectionSlots {
     }
     
     fn consume_slot(&mut self) {
-        self.count -= 1;
+        self.count += 1;
     }
 
     // should be invoked when the connection is accepted
     pub fn produce_slot(&mut self) {
-        self.count += 1;
+        self.count -= 1;
     }
 
     fn is_empty(&self) -> bool {
