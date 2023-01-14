@@ -1,0 +1,12 @@
+[package]
+name = "http_server_iouring_rev"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+io-uring = "0.5.9"
+slab = "0.4.7"
+libc = "0.2.137"
+
