@@ -19,7 +19,6 @@ use slab::Slab;
 
 fn main() {
     let server = TcpListener::bind(("127.0.0.1", 7777)).unwrap_or_else(|err| {
-        //panic!("Problem binding to the specific socket: {err}");
         eprintln!("Problem while binding to the specific socket: {err}");
         process::exit(1);
     });
@@ -30,7 +29,6 @@ fn main() {
     } else {
         println!("error getting local socket's address");
     }
-    //loop {}
 
     let mut syscall_proxy = IoUringProxy::new(128, 64).unwrap_or_else(|err| { 
         eprintln!("Problem while creating the new ring: {err}");
@@ -53,6 +51,5 @@ fn main() {
         while let Some(cqe) = syscall_proxy.cqe_pop() {
             println!("hello");
         }
-
     }
 }
