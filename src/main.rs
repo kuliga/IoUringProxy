@@ -18,18 +18,19 @@ use http_server_iouring_rev::{
 };
 use slab::Slab;
 
+#[derive(Clone)]
 enum ServerFsmToken {
     Accept,
     Poll {
         fd: RawFd,
     },
-    Read {
+    Recv {
         fd: RawFd,
-        buf_index: usize,
+        buf_idx: usize,
     },
-    Write {
+    Send {
         fd: RawFd,
-        buf_index: usize,
+        buf_idx: usize,
         offset: usize,
         len: usize,
     },
@@ -42,11 +43,11 @@ pub struct ConnectionSlots {
 }
 
 impl ConnectionSlots {
-    pub fn new(fd: RawFd, count: usize, capacity: usize) -> ConnectionSlots {
+    pub fn new(fd: RawFd, token: usize, count: usize, capacity: usize) -> ConnectionSlots {
         ConnectionSlots {
             entry: opcode::Accept::new(types::Fd(fd), ptr::null_mut(), ptr::null_mut())
                 .build()
-                .user_data(0),
+                .user_data(token as _),
             count: count,
             capacity: capacity,
         }
@@ -101,14 +102,14 @@ fn main() {
     });
 
     // keeps indices of every buffer
-    let mut buf_pool = Vec::with_capacity(32);
-    //
-    let mut buf_alloc = Slab::with_capacity(32);
+    let mut buf_indices_pool = Vec::with_capacity(32);
+    // allocated per request
+    let mut buf_pool = Slab::with_capacity(32);
     //
     let mut token_alloc = Slab::with_capacity(32);
 
 
-    let mut conns = ConnectionSlots::new(server.as_raw_fd(), 5, 20);
+    let mut conns = ConnectionSlots::new(server.as_raw_fd(), token_alloc.insert(ServerFsmToken::Accept), 5, 20);
     conns.spawn_slots(2, &mut syscall_proxy);
      
     loop {
@@ -122,7 +123,105 @@ fn main() {
         conns.spawn_slots(1, &mut syscall_proxy);
 
         while let Some(cqe) = syscall_proxy.cqe_pop() {
-            println!("hello");
+            let ret = cqe.result();
+            let token_idx = cqe.user_data() as usize;
+
+            if ret < 0 {
+                eprintln!("cqe error: {:?}", io::Error::from_raw_os_error(ret));
+                continue;
+            }
+
+            let token = &mut token_alloc[token_idx];
+            match token {
+                ServerFsmToken::Accept => {
+                    println!("connection accepted!");
+
+                    conns.produce_slot();
+
+                    let fd = ret;
+                    let entry = opcode::PollAdd::new(types::Fd(fd), libc::POLLIN as _)
+                        .build()
+                        .user_data(token_alloc.insert(ServerFsmToken::Poll{fd}) as _);
+
+                    syscall_proxy.push_sqe(&entry);
+                }
+                ServerFsmToken::Poll{fd} => {
+                    println!("poll!");
+
+                    let (buf_idx, buf) = match buf_indices_pool.pop() {
+                        Some(buf_idx) => (buf_idx, &mut buf_pool[buf_idx]),
+                        // allocate new buffer on heap
+                        None => {
+                            let buf = vec![0u8; 4096].into_boxed_slice();
+                            let buf_entry = buf_pool.vacant_entry();
+                            (buf_entry.key(), buf_entry.insert(buf))
+                        }
+                    };
+
+                   // this doesnt work as assigning to borrowed value is actually holding a mutable
+                   // reference
+                    *token = ServerFsmToken::Recv{fd: *fd, buf_idx};
+                    
+                    let entry = opcode::Recv::new(types::Fd(*fd), buf.as_mut_ptr(), buf.len() as _)
+                        .build()
+                        .user_data(token_idx as _);
+                    //*token = ServerFsmToken::Recv{fd: *fd, buf_idx};
+
+                    syscall_proxy.push_sqe(&entry);
+                }
+                ServerFsmToken::Recv{fd, buf_idx} => {
+                    if ret == 0 {
+                        println!("shutdown");
+
+                        unsafe {
+                            libc::close(*fd);
+                        }
+
+                        buf_indices_pool.push(*buf_idx);
+                        token_alloc.remove(token_idx);
+                    } else {
+                        println!("recv!");
+
+                        let len = ret as usize;
+                        let buf = &buf_pool[*buf_idx];
+                        
+                        let entry = opcode::Send::new(types::Fd(*fd), buf.as_ptr(), len as _)
+                            .build()
+                            .user_data(token_idx as _);
+                        *token = ServerFsmToken::Send{fd: *fd, buf_idx: *buf_idx, len: len, offset: 0};
+
+                        syscall_proxy.push_sqe(&entry);
+                    }
+                }
+                ServerFsmToken::Send{fd, buf_idx, offset, len} => {
+                    println!("send!");
+                    let written = *len as usize;
+
+                    let entry = if *offset + written >= *len {
+                        buf_indices_pool.push(*buf_idx);
+
+                        let poll_entry = opcode::PollAdd::new(types::Fd(*fd), libc::POLLIN as _)
+                            .build()
+                            .user_data(token_idx as _);
+                        *token = ServerFsmToken::Poll{fd: *fd};
+                        
+                        poll_entry
+                    } else {
+                        let off = *offset + written;
+                        let length = *len - off;
+                        let buf = &buf_pool[*buf_idx][off..];
+
+                        let send_entry = opcode::Send::new(types::Fd(*fd), buf.as_ptr(), length as _)
+                            .build()
+                            .user_data(token_idx as _);
+                        *token = ServerFsmToken::Send{fd: *fd, buf_idx: *buf_idx, offset: off, len: length};
+
+                        send_entry
+                    };
+
+                    syscall_proxy.push_sqe(&entry);
+                }
+            }
         }
 
         syscall_proxy.sched_backlog();
