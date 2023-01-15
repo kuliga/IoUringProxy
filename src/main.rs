@@ -150,7 +150,7 @@ fn main() {
 
                     let (buf_idx, buf) = match buf_indices_pool.pop() {
                         Some(buf_idx) => (buf_idx, &mut buf_pool[buf_idx]),
-                        // allocate new buffer on heap
+                        // allocate new buffer on a heap
                         None => {
                             let buf = vec![0u8; 4096].into_boxed_slice();
                             let buf_entry = buf_pool.vacant_entry();
@@ -158,14 +158,10 @@ fn main() {
                         }
                     };
 
-                   // this doesnt work as assigning to borrowed value is actually holding a mutable
-                   // reference
-                    *token = ServerFsmToken::Recv{fd: *fd, buf_idx};
-                    
                     let entry = opcode::Recv::new(types::Fd(*fd), buf.as_mut_ptr(), buf.len() as _)
                         .build()
                         .user_data(token_idx as _);
-                    //*token = ServerFsmToken::Recv{fd: *fd, buf_idx};
+                    *token = ServerFsmToken::Recv{fd: *fd, buf_idx};
 
                     syscall_proxy.push_sqe(&entry);
                 }
@@ -173,11 +169,11 @@ fn main() {
                     if ret == 0 {
                         println!("shutdown");
 
+                        buf_indices_pool.push(*buf_idx);
                         unsafe {
                             libc::close(*fd);
                         }
 
-                        buf_indices_pool.push(*buf_idx);
                         token_alloc.remove(token_idx);
                     } else {
                         println!("recv!");
