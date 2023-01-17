@@ -32,6 +32,11 @@ enum ServerFsmToken {
         fd: RawFd,
         buf_idx: usize,
     },
+    FileRead {
+        http_fd: RawFd,
+        fd: RawFd,
+        buf_idx: usize,
+    },
     Send {
         fd: RawFd,
         buf_idx: usize,
@@ -207,23 +212,38 @@ fn main() {
                         let (http_status_line, http_file) = http_lib::decode_request(req);
                         println!("req: {http_file}");
 
-                        let file_contents = fs::read_to_string(http_file).unwrap_or_else(|err| {
-                            eprintln!("{http_file}");
-                            panic!();
-                        });
-                        let file_len = file_contents.len();
-                        let response =
-                            format!("{http_status_line}\r\nContent-Length: {file_len}\r\n\r\n{file_contents}");
+                        //let file_contents = fs::read_to_string(http_file).unwrap_or_else(|err| {
+                        //    eprintln!("{http_file}");
+                        //    panic!();
+                        //});
+                        //let file_len = file_contents.len();
+                        //let response =
+                        //    format!("{http_status_line}\r\nContent-Length: {file_len}\r\n\r\n{file_contents}");
 
-                        //print_type_of(&response); 
-                        //print_type_of(&buf); 
-                        let entry = opcode::Send::new(types::Fd(*fd), response.as_ptr(), response.len() as _)
+                        // cant use File::open() because the fd would be dropped if it went out of
+                        // scope
+                        let mut http_fd = unsafe {
+                            libc::open(http_file.as_ptr() as *const i8, libc::O_RDONLY) 
+                        };
+                        let entry = opcode::Read::new(types::Fd(http_fd.as_raw_fd()), buf.as_mut_ptr(), 4096)
                             .build()
                             .user_data(token_idx as _);
-                        *token = ServerFsmToken::Send{fd: *fd, buf_idx: *buf_idx, len: len, offset: 0};
+
+                        *token = ServerFsmToken::FileRead{
+                            http_fd: http_fd,
+                            fd: *fd,
+                            buf_idx: *buf_idx,
+                        };
 
                         syscall_proxy.push_sqe(&entry);
                     }
+                }
+                ServerFsmToken::FileRead{http_fd, fd, buf_idx} => {
+                        //let entry = opcode::Send::new(types::Fd(*fd), response.as_ptr(), response.len() as _)
+                        //    .build()
+                        //    .user_data(token_idx as _);
+                        //*token = ServerFsmToken::Send{fd: *fd, buf_idx: *buf_idx, len: len, offset: 0};
+                    
                 }
                 ServerFsmToken::Send{fd, buf_idx, offset, len} => {
                     println!("send!");
