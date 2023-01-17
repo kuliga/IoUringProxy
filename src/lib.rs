@@ -1,7 +1,11 @@
 use io_uring::{
 	squeue,
     cqueue,
+    Submitter,
 	IoUring,
+};
+use libc:: {
+    iovec,
 };
 use std::{
     io,
@@ -20,6 +24,13 @@ pub struct IoUringProxy {
 impl IoUringProxy {
     pub fn new(entries: u32, backlog_size: usize) -> io::Result<Self> {
         let ring = IoUring::new(entries)?;
+        let mut probe = io_uring::register::Probe::new();
+        ring.submitter().register_probe(&mut probe).unwrap(); 
+        
+        if probe.is_supported(io_uring::opcode::ReadFixed::CODE) == true {
+            println!("dupa");
+        }
+        println!("huj");
 
         Ok(IoUringProxy {
             ring: ring,
@@ -37,6 +48,22 @@ impl IoUringProxy {
             Err(ref err) if err.raw_os_error() == Some(libc::EBUSY) => Ok(0),
             Err(err) => Err(err) 
         }
+    }
+
+    pub fn register_buffers(&self, bufs: &[iovec]) -> io::Result<()> {
+        self.ring.submitter().register_buffers(bufs)
+    }
+
+    pub fn unregister_buffers(&self) -> io::Result<()> {
+        self.ring.submitter().unregister_buffers()
+    }
+
+    pub fn unregister_files(&self) -> io::Result<()> {
+        self.ring.submitter().unregister_files()
+    }
+
+    pub fn register_files(&self, fds: &[RawFd]) -> io::Result<()> {
+        self.ring.submitter().register_files(fds)
     }
 
     pub fn sq_sync(&mut self) {

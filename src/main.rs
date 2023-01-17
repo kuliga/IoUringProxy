@@ -22,7 +22,7 @@ use http_server_iouring_rev::{
 mod http_lib;
 use slab::Slab;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum ServerFsmToken {
     Accept,
     Poll {
@@ -33,7 +33,6 @@ enum ServerFsmToken {
         buf_idx: usize,
     },
     HttpFileRead {
-        http_fd: RawFd,
         http_status: usize,
         fd: RawFd,
         buf_idx: usize,
@@ -127,12 +126,44 @@ fn main() {
         process::exit(1);
     });
 
+    // register io buffers
+    let io_bufs = [
+        libc::iovec {
+            iov_base: vec![0u8; 512].as_mut_ptr() as *mut libc::c_void,
+            iov_len: 512,
+        },
+        libc::iovec {
+            iov_base: vec![0u8; 512].as_mut_ptr() as *mut libc::c_void,
+            iov_len: 512,
+        }
+    ];
+
+    match syscall_proxy.register_buffers(&io_bufs) {
+        Ok(_) => println!("io buffers registered!"),
+        Err(_) => panic!("io buffers not registed"),
+    };
+
+    // register fds
+    // cant use File::open() because the fd would be dropped if it went out of
+    // scope
+    let http_fds: [RawFd; 2] = unsafe {[
+        // null terminate the strings as this is passed to raw c syscalls
+        libc::open("404.html\0".as_ptr() as *const libc::c_char, libc::O_RDWR) as _,
+        libc::open("hello.html\0".as_ptr() as *const libc::c_char, libc::O_RDWR) as _,
+    ]};
+    println!("{} {} ", http_fds[0], http_fds[1]);
+
+    match syscall_proxy.register_files(&http_fds) {
+        Ok(_) => println!("http fds registered!"),
+        Err(_) => panic!("http fds not registered!"),
+    };
+
     // keeps indices of every buffer
     let mut buf_indices_pool = Vec::with_capacity(32);
     // allocated per request
     let mut buf_pool = Slab::with_capacity(32);
     //
-    let mut token_alloc = Slab::with_capacity(32);
+    let mut token_alloc = Slab::with_capacity(64);
 
 
     let mut conns = ConnectionSlots::new(server.as_raw_fd(), token_alloc.insert(ServerFsmToken::Accept), 5, 20);
@@ -151,6 +182,9 @@ fn main() {
         while let Some(cqe) = syscall_proxy.cqe_pop() {
             let ret = cqe.result();
             let token_idx = cqe.user_data() as usize;
+            println!("{token_idx} result {ret}");
+            println!("{:?}", token_alloc);
+            println!("{:?}", token_alloc[token_idx]);
 
             if ret < 0 {
                 eprintln!("cqe error: {:?}", io::Error::from_raw_os_error(ret));
@@ -213,18 +247,15 @@ fn main() {
                         let (http_status, http_file) = http_lib::decode_request(req);
                         println!("req: {http_file}");
 
-                        // cant use File::open() because the fd would be dropped if it went out of
-                        // scope
-                        let mut http_fd = unsafe {
-                            libc::open(http_file.as_ptr() as *const i8, libc::O_RDWR) 
-                        };
-                        println!("http_fd: {http_fd}");
-                        let entry = opcode::Read::new(types::Fd(http_fd), buf.as_mut_ptr(), 4096 as _)
+                        let entry = opcode::ReadFixed::new(
+                            types::Fixed(0 as _),
+                            io_bufs[0].iov_base as *mut u8,
+                            io_bufs[0].iov_len as _, 0)
                             .build()
                             .user_data(token_idx as _);
 
+                        println!("recv token_idx: {token_idx}");
                         *token = ServerFsmToken::HttpFileRead{
-                            http_fd: http_fd,
                             http_status: http_status,
                             fd: *fd,
                             buf_idx: *buf_idx,
@@ -233,12 +264,8 @@ fn main() {
                         syscall_proxy.push_sqe(&entry);
                     }
                 }
-                ServerFsmToken::HttpFileRead{http_fd, http_status, fd, buf_idx} => {
+                ServerFsmToken::HttpFileRead{http_status, fd, buf_idx} => {
                     println!("HttpFileRead!");
-
-                    unsafe {
-                        libc::close(*http_fd);
-                    }
 
                     let len = ret as usize;
                     let buf = &mut buf_pool[*buf_idx];
@@ -283,6 +310,9 @@ fn main() {
         }
         syscall_proxy.sched_backlog();
     }
+
+    syscall_proxy.unregister_files().unwrap();
+    syscall_proxy.unregister_buffers().unwrap();
 }
 
 fn print_type_of<T>(_: &T) {
