@@ -5,6 +5,9 @@ use std::{
     os::unix::io::{AsRawFd, RawFd},
     ptr,
     collections::VecDeque,
+    str,
+    fs::File,
+    fs,
 };
 use io_uring::{
     opcode,
@@ -16,6 +19,7 @@ use http_server_iouring_rev::{
 //    ConnectionSlots,
     IoUringProxy,
 };
+mod http_lib;
 use slab::Slab;
 
 #[derive(Clone)]
@@ -34,6 +38,22 @@ enum ServerFsmToken {
         offset: usize,
         len: usize,
     },
+}
+
+fn http_handle_request(buf: &str) {
+    let http_req_line = buf.lines().next().unwrap();
+
+    let (http_status_line, http_file) = match &http_req_line[..] {
+        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
+        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
+    };
+
+    let file_contents = fs::read_to_string(http_file).unwrap();
+    let file_len = file_contents.len();
+    let response =
+        format!("{http_status_line}\r\nContent-Length: {file_len}\r\n\r\n{file_contents}");
+
+    //stream.write_all(response.as_bytes()).unwrap();
 }
 
 pub struct ConnectionSlots {
@@ -152,7 +172,7 @@ fn main() {
                         Some(buf_idx) => (buf_idx, &mut buf_pool[buf_idx]),
                         // allocate new buffer on a heap
                         None => {
-                            let buf = vec![0u8; 4096].into_boxed_slice();
+                            let buf = vec![0u8; 4096];//.into_boxed_slice();
                             let buf_entry = buf_pool.vacant_entry();
                             (buf_entry.key(), buf_entry.insert(buf))
                         }
@@ -179,9 +199,25 @@ fn main() {
                         println!("recv!");
 
                         let len = ret as usize;
-                        let buf = &buf_pool[*buf_idx];
-                        
-                        let entry = opcode::Send::new(types::Fd(*fd), buf.as_ptr(), len as _)
+                        let buf = &mut buf_pool[*buf_idx];
+                        print_type_of(&buf);
+
+                        // requests will always be valid
+                        let req = str::from_utf8(&buf.as_slice()).unwrap();
+                        let (http_status_line, http_file) = http_lib::decode_request(req);
+                        println!("req: {http_file}");
+
+                        let file_contents = fs::read_to_string(http_file).unwrap_or_else(|err| {
+                            eprintln!("{http_file}");
+                            panic!();
+                        });
+                        let file_len = file_contents.len();
+                        let response =
+                            format!("{http_status_line}\r\nContent-Length: {file_len}\r\n\r\n{file_contents}");
+
+                        //print_type_of(&response); 
+                        //print_type_of(&buf); 
+                        let entry = opcode::Send::new(types::Fd(*fd), response.as_ptr(), response.len() as _)
                             .build()
                             .user_data(token_idx as _);
                         *token = ServerFsmToken::Send{fd: *fd, buf_idx: *buf_idx, len: len, offset: 0};
@@ -222,4 +258,8 @@ fn main() {
 
         syscall_proxy.sched_backlog();
     }
+}
+
+fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>())
 }
