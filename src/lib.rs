@@ -1,8 +1,6 @@
 use io_uring::{
-    opcode,
 	squeue,
     cqueue,
-	types,
 	IoUring,
 };
 use std::{
@@ -90,3 +88,4 @@ impl IoUringProxy {
         }
     }
 }
+
