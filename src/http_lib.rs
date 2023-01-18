@@ -1,16 +1,7 @@
-use std::str;
-
-//pub fn HttpStatus {
-//    
-//}
-
-//pub fn decode_request(buf: &str) -> (&'static str, &'static str) {
-//    let req_line = buf.lines().next().unwrap();
-//    match &req_line[..] {
-//        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
-//        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
-//    }
-//}
+use std::{
+    str,
+    io::Write,
+};
 
 pub fn decode_request(buf: &str) -> (usize, &'static str) {
     let req_line = buf.lines().next().unwrap();
@@ -21,7 +12,7 @@ pub fn decode_request(buf: &str) -> (usize, &'static str) {
     }
 }
 
-pub fn format_response(status_code: usize, len: usize, buf: &mut [u8]) {
+pub fn format_response(status_code: usize, len: usize, buf: &[u8], mut response: &mut [u8]) {
     let status_code = match status_code {
         200 => "HTTP/1.1 200 OK",
         404 => "HTTP/1.1 404 NOT FOUND",
@@ -29,6 +20,6 @@ pub fn format_response(status_code: usize, len: usize, buf: &mut [u8]) {
     };
 
     let buf = str::from_utf8(&buf).unwrap();
-    let buf = format!("{status_code}\r\nContent-Length: {len}\r\n\r\n{buf}");
+    write!(response, "{status_code}\r\nContent-Length: {len}\r\n\r\n{buf}");
 }
 

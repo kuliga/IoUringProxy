@@ -24,13 +24,6 @@ pub struct IoUringProxy {
 impl IoUringProxy {
     pub fn new(entries: u32, backlog_size: usize) -> io::Result<Self> {
         let ring = IoUring::new(entries)?;
-        let mut probe = io_uring::register::Probe::new();
-        ring.submitter().register_probe(&mut probe).unwrap(); 
-        
-        if probe.is_supported(io_uring::opcode::ReadFixed::CODE) == true {
-            println!("dupa");
-        }
-        println!("huj");
 
         Ok(IoUringProxy {
             ring: ring,
