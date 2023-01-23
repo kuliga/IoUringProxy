@@ -22,4 +22,3 @@ pub fn format_response(status_code: usize, len: usize, buf: &[u8], mut response:
     let buf = str::from_utf8(&buf).unwrap();
     write!(response, "{status_code}\r\nContent-Length: {len}\r\n\r\n{buf}");
 }
-

@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-io-uring = "0.5.9"
+io-uring = "0.5.11"
 slab = "0.4.7"
 libc = "0.2.137"
 
